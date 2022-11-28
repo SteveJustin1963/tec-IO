@@ -12,6 +12,8 @@
 ### Iterate
 
 - 24 port PPI see https://github.com/SteveJustin1963/tec-IO-PPI/
+- Shift Registers
+
 
 
 ### Ref
