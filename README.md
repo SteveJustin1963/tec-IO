@@ -13,6 +13,8 @@
 
 - 24 port PPI see https://github.com/SteveJustin1963/tec-IO-PPI/
 - Shift Registers
+https://lagacemichel.com/2022/07/02/using-shift-registers-to-increase-digital-outputs/
+
 
 
 
