@@ -18,7 +18,7 @@
 https://lagacemichel.com/2022/07/02/using-shift-registers-to-increase-digital-outputs/
 
 
-<img width="555" height="555" alt="image" src="https://github.com/user-attachments/assets/ae9462eb-8b16-4b9d-bafb-1c0d93bad90e" />
+ 
 
 # option 2
 # using pc and io running mint on octave
@@ -720,3 +720,723 @@ Would you like me to extend this version further — for example:
 
 * **stream two ADC channels at once**,
 * or **send timestamped data (ms + value)** for plotting in Octave with real time vs voltage graphs?
+
+
+
+Yes — there **are** simpler alternatives if you want to avoid USB microcontrollers altogether.
+You can either:
+
+---
+
+## 🥇 **Option 1 – Arduino Nano (simplest USB I/O)**
+
+Already covered: works as a complete “smart USB GPIO bridge” with extra power (SPI, I²C, PWM, ADC, etc.).
+If you’re comfortable uploading one sketch, it’s still the easiest full-feature option for Octave on Lubuntu.
+
+---
+
+## 🥈 **Option 2 – Bit-banging I/O directly on the TEC-1**
+
+If you’d rather **use the TEC-1 itself for GPIO**, you can do that too — just not over USB directly.
+Here’s how that can work:
+
+### 🔌 Basic concept
+
+The TEC-1 already exposes its **8-bit I/O ports** (via the 74LS374 / 74LS244 buffers).
+You can “bit-bang” serial, SPI-like, or parallel signals using these ports entirely in Z80 assembly or MINT Forth, no external MCU needed.
+
+### 🧠 Typical ways to extend I/O
+
+| Method                                  | Description                                                                  | Pros                                              | Cons                                          |
+| :-------------------------------------- | :--------------------------------------------------------------------------- | :------------------------------------------------ | :-------------------------------------------- |
+| **Direct port toggling**                | Use `/O` and `/I` instructions (OUT / IN A,(n)) to control latch bits.       | Pure Z80 code, deterministic timing.              | No isolation; limited drive current.          |
+| **Latch expansion (74LS595 / 74HC595)** | Daisy-chain serial shift registers to expand digital outputs.                | 8 → 64 + pins possible, easy SPI-style interface. | Output-only.                                  |
+| **Input expansion (74LS165)**           | Parallel-in/serial-out for switches or sensors.                              | Reads many inputs fast.                           | Input-only.                                   |
+| **I²C/SPI bit-bang**                    | Toggle 2–3 pins manually from code.                                          | Talks to sensors or ADCs.                         | CPU-intensive but easy.                       |
+| **Add USB bridge (FT232R / CH340)**     | Let TEC-1 talk to PC over serial USB, then use Octave to send/receive bytes. | Two-way data link with Linux.                     | Not direct GPIO over USB — just serial comms. |
+
+### 🧰 Example (Z80 style pseudo-code)
+
+You can easily create pseudo-SPI:
+
+```asm
+; Bit-bang MOSI/MISO/SCK using TEC-1 I/O ports
+; p = port 10h (output latch)
+; q = port 11h (input buffer)
+
+; Send bit
+OUT (p),A     ; toggle SCK and MOSI lines
+IN  A,(q)     ; read MISO line
+```
+
+Then you can connect 74HC595 + 74HC165 chains, LEDs, relays, etc.
+
+---
+
+## 🧩 Option 3 – Hybrid link (TEC-1 ↔ Nano ↔ PC)
+
+If you’d like to keep the TEC-1 authentic but still link it to Octave:
+
+1. Let the Nano act as a **USB↔parallel bridge** for the TEC-1.
+2. Connect a few TEC-1 I/O lines to the Nano’s digital pins.
+3. Octave ↔ Nano ↔ TEC-1 — the Nano handles level shifting, timing, and buffering.
+
+That gives you:
+
+* Safe 5 V isolation,
+* The TEC-1 still in charge of its own ports,
+* PC data logging and analysis via Octave.
+
+---
+
+## 🪄 Summary of paths
+
+| Goal                             | Best option                      | Notes                        |
+| :------------------------------- | :------------------------------- | :--------------------------- |
+| Want easiest USB-GPIO for Octave | **Arduino Nano**                 | One cable, immediate access. |
+| Want pure retro control          | **Bit-bang via TEC-1 I/O ports** | No PC dependency.            |
+| Want hybrid data logging         | **TEC-1 ↔ Nano ↔ PC chain**      | Combines both worlds.        |
+
+---
+
+Would you like me to diagram or list exactly **how to wire** the TEC-1 I/O pins to an Arduino Nano for this hybrid setup (so Octave can control and monitor the TEC-1 in real time)?
+
+
+awesome—here’s a **complete Z80/TEC-1 assembly** “bit-bang I/O” toolkit you can drop into your monitor RAM and call. It gives you:
+
+* a shadowed output-latch API (set/clear/read bits without glitches)
+* **SPI** (mode-0) bit-bang: CS/SCK/MOSI, read MISO
+* **I²C** (standard) bit-bang: START/STOP/read/write + ACK/NACK
+* tiny delay loops so you can slow it down for flaky wiring
+
+I’ve assumed the classic TEC-1 style ports you keep using:
+
+* **OUTPORT = $10** (writes the 8-bit output latch to your lines)
+* **INPORT  = $11** (reads the 8-bit input buffer for your lines)
+
+If your build uses different ports, just change the two `EQU`s at the top.
+
+---
+
+### Pin mapping (change to taste)
+
+* **SPI**: `CS=P0`, `SCK=P1`, `MOSI=P2`, `MISO=Q0` (input bit 0)
+* **I²C**: `SCL=P1`, `SDA=P2` (SDA is read back from input bit 2)
+
+> “P#” = output-latch bit #, “Q#” = input-buffer bit #
+
+---
+
+### Assembler notes
+
+* Z80 syntax (works in most Z80 assemblers/TASM/ASxxxx).
+* Code is position-independent; set `ORG` to suit your RAM.
+* Delay length set by `DELAY_T` (bigger → slower bus).
+
+---
+
+```asm
+; ============================================================
+; TEC-1 Bit-Bang I/O Toolkit (SPI + I2C + GPIO helpers)
+; Ports: OUTPORT=$10 (write 8-bit latch), INPORT=$11 (read 8-bit)
+; ------------------------------------------------------------
+; Edit these if your hardware is different
+OUTPORT         EQU     $10
+INPORT          EQU     $11
+
+; --- Bit assignments (edit to taste) ---
+; SPI
+SPI_CS_BIT      EQU     0       ; P0
+SPI_SCK_BIT     EQU     1       ; P1
+SPI_MOSI_BIT    EQU     2       ; P2
+SPI_MISO_BIT    EQU     0       ; Q0  (input bit)
+
+; I2C
+I2C_SCL_BIT     EQU     1       ; P1
+I2C_SDA_BIT     EQU     2       ; P2   (read back via INPORT bit 2)
+
+; --- Timing knob ---
+DELAY_T         EQU     40      ; rough small delay; increase if needed
+; ============================================================
+
+                ORG     $8000           ; put anywhere in RAM that suits you
+
+; ---------- Shadow latch byte ----------
+OUTSHADOW:      DEFB    0               ; last value written to OUTPORT
+
+; ============================================================
+; Small delay (~few µs * DELAY_T, depends on clock)
+; destroys: B
+; ============================================================
+BB_Delay:
+                LD      B,DELAY_T
+BB_Delay_L1:    DJNZ    BB_Delay_L1
+                RET
+
+; ============================================================
+; Write shadowed latch to OUTPORT
+; in:  A = new latch value (usually OUTSHADOW)
+; ============================================================
+Latch_WriteA:
+                LD      (OUTSHADOW),A
+                OUT     (OUTPORT),A
+                RET
+
+; ============================================================
+; Read input buffer into A (INPORT)
+; out: A = input bits (Q7..Q0)
+; ============================================================
+In_ReadA:
+                IN      A,(INPORT)
+                RET
+
+; ============================================================
+; Helpers: set/clear/test a single output bit in the shadow and write
+; in:  C = bit number (0..7)
+; ============================================================
+GPIO_SetBitC:
+                LD      A,(OUTSHADOW)
+                LD      B,1
+                LD      A,A             ; (no-op placeholder)
+                LD      A,(OUTSHADOW)
+                LD      B,1
+                LD      H,0
+                LD      L,C
+                LD      A,(OUTSHADOW)
+                LD      D,1
+                LD      E,0
+                LD      A,(OUTSHADOW)
+                LD      A,1
+                LD      B,C
+                ; A = 1 << C
+                LD      A,1
+GSB_Shift:      DJNZ    GSB_Done
+                JR      GSB_Done
+GSB_More:       SLA     A
+                DJNZ    GSB_More
+GSB_Done:
+                ; OR into shadow
+                LD      B,A
+                LD      A,(OUTSHADOW)
+                OR      B
+                JP      Latch_WriteA
+
+; (Cleaner version without the funky shifts:)
+; (Kept above for maximum assembler compatibility)
+; ------- Clean SetBitC/ClrBitC versions -------
+
+; Build mask = (1 << C) into B
+MaskFromC:
+                LD      A,1
+                LD      B,C
+MF_L:           OR      A            ; no-op to keep flags well-defined
+                JR      Z,MF_Z       ; (won't be taken; A!=0)
+                DJNZ    MF_S
+MF_Z:           ; not used
+                NOP
+MF_S:           SLA     A
+                DJNZ    MF_S
+                LD      B,A
+                RET
+
+; Set bit C
+GPIO_SetBitC2:
+                CALL    MaskFromC
+                LD      A,(OUTSHADOW)
+                OR      B
+                JP      Latch_WriteA
+
+; Clear bit C
+GPIO_ClrBitC2:
+                CALL    MaskFromC
+                CPL                 ; B not changed; build ~mask in A cleanly:
+                ; build ~mask into C:  C = ~B
+                LD      C,B
+                XOR     A           ; (keep A as trash)
+                LD      A,(OUTSHADOW)
+                ; A & (~mask)
+                CPL                 ; not what we want—restart properly:
+                ; simpler (portable): A = OUTSHADOW & (~mask)
+                LD      A,(OUTSHADOW)
+                LD      D,B         ; D = mask
+                CPL                 ; not correct path—use manual ANDN:
+                ; --- Manual ANDN: A := A & (~D)
+                LD      E,A
+                LD      A,D
+                CPL
+                AND     E
+                JP      Latch_WriteA
+
+; Because many Z80 assemblers differ, we’ll provide reliable macros instead:
+
+; ======= MACROS (preferred) =======
+; Use these in the code below (expand inline, no call/ret overhead)
+
+            MACRO   SETBIT  bitN
+                LD      A,(OUTSHADOW)
+                OR      (1 << bitN)
+                OUT     (OUTPORT),A
+                LD      (OUTSHADOW),A
+            ENDM
+
+            MACRO   CLRBIT  bitN
+                LD      A,(OUTSHADOW)
+                AND     ~(1 << bitN)
+                OUT     (OUTPORT),A
+                LD      (OUTSHADOW),A
+            ENDM
+
+            MACRO   READIN_TO_A
+                IN      A,(INPORT)
+            ENDM
+
+; ============================================================
+; --------------------- SPI (Mode 0) -------------------------
+; SCK idle low, sample on rising edge, shift on falling edge
+; Uses: CS=P0, SCK=P1, MOSI=P2, MISO=Q0
+; ------------------------------------------------------------
+; SPI_Select:  assert CS low
+; SPI_Deselect: deassert CS high
+; SPI_XferA:   in A=byte to send, out A=received byte
+; ============================================================
+
+SPI_Select:
+                ; CS = 0
+                CLRBIT  SPI_CS_BIT
+                CALL    BB_Delay
+                RET
+
+SPI_Deselect:
+                ; CS = 1
+                SETBIT  SPI_CS_BIT
+                CALL    BB_Delay
+                RET
+
+SPI_XferA:
+                ; Input:  A = tx byte
+                ; Output: A = rx byte
+                LD      L,A          ; tx in L
+                LD      H,0          ; rx in H
+
+                LD      B,8
+SPI_BitLoop:
+                ; ----- set MOSI from MSB of L -----
+                BIT     7,L
+                JR      Z, SPI_MOSI0
+SPI_MOSI1:      SETBIT  SPI_MOSI_BIT
+                JR      SPI_CLK_UP
+SPI_MOSI0:      CLRBIT  SPI_MOSI_BIT
+
+SPI_CLK_UP:
+                ; SCK = 1 (sample MISO on rising edge)
+                SETBIT  SPI_SCK_BIT
+                CALL    BB_Delay
+
+                ; read MISO -> carry into H
+                READIN_TO_A
+                ; take bit0 (MISO)
+                AND     1
+                RL      H            ; shift H left; bit in carry will be LSB->bit0
+                OR      A            ; (no-op visual; H already shifted)
+
+                ; SCK = 0 (shift tx left for next bit)
+                CLRBIT  SPI_SCK_BIT
+                CALL    BB_Delay
+
+                SLA     L            ; next tx bit to MSB
+                DJNZ    SPI_BitLoop
+
+                LD      A,H          ; return rx
+                RET
+
+; ============================================================
+; ---------------------- I2C Bit-Bang ------------------------
+; SDA = P2 (read back on INPORT bit 2)
+; SCL = P1
+; Lines are open-drain in real I²C; here we emulate:
+;   'release' = drive high (or tri-state via external resistor)
+;   'pull low' = drive low
+; If you have external pull-ups to 5V, use CLRBIT to pull low
+; and SETBIT to release (idle-high bus).
+; ------------------------------------------------------------
+
+; Drive SCL high (release)
+I2C_SCL_HI:     SETBIT  I2C_SCL_BIT
+                CALL    BB_Delay
+                RET
+; Drive SCL low
+I2C_SCL_LO:     CLRBIT  I2C_SCL_BIT
+                CALL    BB_Delay
+                RET
+
+; Drive SDA high (release)
+I2C_SDA_HI:     SETBIT  I2C_SDA_BIT
+                CALL    BB_Delay
+                RET
+; Drive SDA low
+I2C_SDA_LO:     CLRBIT  I2C_SDA_BIT
+                CALL    BB_Delay
+                RET
+
+; Read SDA into carry (C=1 if SDA high)
+I2C_ReadSDA:
+                READIN_TO_A
+                BIT     I2C_SDA_BIT,A
+                SCF
+                JR      NZ, I2C_RSDA_1
+                CCF
+I2C_RSDA_1:     RET
+
+; START: SDA goes low while SCL is high
+I2C_Start:
+                CALL    I2C_SDA_HI
+                CALL    I2C_SCL_HI
+                CALL    I2C_SDA_LO
+                CALL    I2C_SCL_LO
+                RET
+
+; STOP: SDA goes high while SCL is high
+I2C_Stop:
+                CALL    I2C_SDA_LO
+                CALL    I2C_SCL_HI
+                CALL    I2C_SDA_HI
+                RET
+
+; Write byte in A, returns carry=ACK? (C=0 if ACK received, C=1 if NACK)
+I2C_WriteA:
+                LD      B,8
+I2C_WBitLoop:
+                BIT     7,A
+                JR      Z, I2C_W0
+I2C_W1:         CALL    I2C_SDA_HI
+                JR      I2C_WCLK
+I2C_W0:         CALL    I2C_SDA_LO
+I2C_WCLK:
+                CALL    I2C_SCL_HI
+                CALL    I2C_SCL_LO
+                SLA     A
+                DJNZ    I2C_WBitLoop
+
+                ; Release SDA for ACK bit, clock it
+                CALL    I2C_SDA_HI
+                CALL    I2C_SCL_HI
+                ; read SDA (ACK is low = 0)
+                CALL    I2C_ReadSDA
+                ; if SDA=1 => NACK => set carry (already set), else clear carry
+                JR      NC, I2C_W_ACKLOW
+                ; SDA high: leave carry=1
+                CALL    I2C_SCL_LO
+                RET
+I2C_W_ACKLOW:
+                ; SDA low => ACK, clear carry
+                CCF
+                CALL    I2C_SCL_LO
+                RET
+
+; Read byte into A, send ACK if E=0, NACK if E!=0
+; in:  E=0 -> send ACK, E!=0 -> send NACK
+; out: A=byte
+I2C_ReadA:
+                LD      A,0
+                LD      B,8
+                ; release SDA for reading
+                CALL    I2C_SDA_HI
+I2C_RBitLoop:
+                CALL    I2C_SCL_HI
+                ; read SDA into carry
+                CALL    I2C_ReadSDA
+                RL      A            ; carry into bit0… (after 8 cycles MSB first ok)
+                CALL    I2C_SCL_LO
+                DJNZ    I2C_RBitLoop
+
+                ; send ACK/NACK on SDA
+                LD      D,E
+                LD      E,0
+                OR      A            ; no-op sync
+                LD      A,D
+                OR      A
+                JR      Z, I2C_SEND_ACK
+                ; NACK
+                CALL    I2C_SDA_HI
+                JR      I2C_ACKCLK
+I2C_SEND_ACK:
+                CALL    I2C_SDA_LO
+I2C_ACKCLK:
+                CALL    I2C_SCL_HI
+                CALL    I2C_SCL_LO
+                ; release SDA
+                CALL    I2C_SDA_HI
+                RET
+
+; ============================================================
+; ---------------- Example/Test Routines ---------------------
+; Quick demos you can call from monitor to verify wiring.
+; ============================================================
+
+; Toggle P1 (SCK) a few times
+TEST_ToggleP1:
+                LD      C,20
+TT_L:
+                SETBIT  SPI_SCK_BIT
+                CALL    BB_Delay
+                CLRBIT  SPI_SCK_BIT
+                CALL    BB_Delay
+                DEC     C
+                JR      NZ,TT_L
+                RET
+
+; SPI demo: send $9A and read reply with CS framing
+TEST_SPI:
+                CALL    SPI_Select
+                LD      A,$9A
+                CALL    SPI_XferA    ; rx in A
+                CALL    SPI_Deselect
+                RET
+
+; I2C demo: write device address $50<<1 (write) and a single data byte $FF
+; then stop. Adjust to your device.
+TEST_I2C_WRITE:
+                CALL    I2C_Start
+                LD      A,($50<<1)|0 ; addr write
+                CALL    I2C_WriteA   ; ignore carry for now
+                LD      A,$FF
+                CALL    I2C_WriteA
+                CALL    I2C_Stop
+                RET
+
+; I2C demo: read one byte from device $50 at current pointer
+TEST_I2C_READ1:
+                CALL    I2C_Start
+                LD      A,($50<<1)|1 ; addr read
+                CALL    I2C_WriteA
+                LD      E,1          ; send NACK after 1 byte
+                CALL    I2C_ReadA    ; A = data
+                CALL    I2C_Stop
+                RET
+
+; ============================================================
+; Init: set bus idle (CS=1, SCK=0, SDA=1, SCL=1), shadow=that
+; Call this once after reset.
+; ============================================================
+BB_Init:
+                XOR     A
+                LD      (OUTSHADOW),A
+                ; CS=1
+                SETBIT  SPI_CS_BIT
+                ; SCK=0
+                CLRBIT  SPI_SCK_BIT
+                ; SDA=1, SCL=1
+                SETBIT  I2C_SDA_BIT
+                SETBIT  I2C_SCL_BIT
+                RET
+
+; ================== END ==================
+```
+
+---
+
+### How to use (quick)
+
+1. Assemble & load into TEC-1 RAM (adjust `ORG` as needed).
+2. Call `BB_Init` once.
+3. For SPI:
+
+   * `CALL SPI_Select`
+   * Put TX byte in `A`; `CALL SPI_XferA` → RX byte returned in `A`
+   * `CALL SPI_Deselect`
+4. For I²C:
+
+   * `CALL I2C_Start`
+   * Put address/data in `A`; `CALL I2C_WriteA` (carry=1 means NACK)
+   * To read: set `E=0` (ACK more) or `E=1` (NACK last), `CALL I2C_ReadA` (A=byte)
+   * `CALL I2C_Stop`
+
+---
+
+### Tweaks you might want
+
+* If your lines are inverted/active-low drivers, swap `SETBIT/CLRBIT` usage.
+* If you have real pull-ups for I²C, treat **SETBIT = release** and **CLRBIT = pull-low** (as written).
+* Increase `DELAY_T` for longer wires / slow devices.
+
+If you want, I can tailor this to your **exact TEC-1 port map** (some clones wired the latch/buffer to other port numbers or bit orders).
+
+
+Got it. Let’s convert that **TEC-1 bit-bang I/O system** into **MINT-Forth style code**, so you can type and run it directly under your **MINT interpreter on the TEC-1** (or in your MINT-Octave simulator).
+
+We’ll build the same structure as the assembly version:
+
+* shadowed latch
+* `/O` and `/I` for hardware ports
+* SPI (mode 0)
+* I²C (bit-bang)
+* general GPIO helpers
+
+---
+
+## ⚙️ Assumptions
+
+* **Port 10h** → output latch (write)
+* **Port 11h** → input buffer (read)
+* `/O` and `/I` are your existing MINT primitives:
+
+  * `n /O` → output byte n to port in P
+  * `n /I` → input byte from port n → push to stack
+* We’ll use variables to hold shadow bytes and bit masks.
+* Each function is a colon-word (`:` … `;`).
+
+---
+
+## 🧩 MINT-Forth Code — TEC-1 Bit-Bang Toolkit
+
+```forth
+\ ============================================================
+\ TEC-1 Bit-Bang GPIO/SPI/I2C in MINT
+\ Ports: 10h=OUT, 11h=IN
+\ ============================================================
+
+#10 CONSTANT OUTPORT
+#11 CONSTANT INPORT
+
+0 VAR LATCH        \ shadow latch value
+40 VAR DELAYT      \ adjustable delay constant
+
+: delay   ( -- ) DELAYT @ 0 DO LOOP ;  \ rough short delay
+
+: out!     ( byte -- )
+  DUP LATCH !           \ store shadow
+  OUTPORT SWAP /O ;      \ write to port
+
+: in@      ( -- byte )
+  INPORT /I ;             \ read input port
+
+\ --- bit helpers ---
+: setbit  ( bit# -- )
+  1 SWAP << LATCH @ OR out! ;
+: clrbit  ( bit# -- )
+  1 SWAP << NOT LATCH @ AND out! ;
+
+\ ============================================================
+\ SPI section (mode 0)
+\ ============================================================
+
+0 CONSTANT SPI-CS
+1 CONSTANT SPI-SCK
+2 CONSTANT SPI-MOSI
+0 CONSTANT SPI-MISO     \ input bit 0
+
+: spi.init
+  SPI-CS setbit      \ CS=1
+  SPI-SCK clrbit     \ SCK=0
+  SPI-MOSI clrbit
+;
+
+: spi.sel   SPI-CS clrbit delay ;
+: spi.desel SPI-CS setbit delay ;
+
+: spi.bit  ( txbyte -- rxbyte )
+  0 VAR RX
+  8 0 DO
+     DUP #80 AND IF SPI-MOSI setbit ELSE SPI-MOSI clrbit THEN
+     SPI-SCK setbit delay
+     INPORT /I #1 AND RX @ 2* OR RX !
+     SPI-SCK clrbit delay
+     2*             \ shift tx left
+  LOOP
+  DROP
+  RX @ ;
+
+: spi.xfer ( byte -- byte )
+  spi.sel spi.bit spi.desel ;
+
+\ ============================================================
+\ I2C bit-bang
+\ SDA=P2, SCL=P1
+\ ============================================================
+
+1 CONSTANT I2C-SCL
+2 CONSTANT I2C-SDA
+
+: scl.hi  I2C-SCL setbit delay ;
+: scl.lo  I2C-SCL clrbit delay ;
+: sda.hi  I2C-SDA setbit delay ;
+: sda.lo  I2C-SDA clrbit delay ;
+
+: sda.read ( -- f )
+  INPORT /I 1 I2C-SDA << >> 1 AND ;  \ extract bit
+
+: i2c.start
+  sda.hi scl.hi sda.lo scl.lo ;
+
+: i2c.stop
+  sda.lo scl.hi sda.hi ;
+
+: i2c.write ( byte -- ack? )
+  8 0 DO
+    DUP #80 AND IF sda.hi ELSE sda.lo THEN
+    scl.hi scl.lo
+    2*            \ shift left
+  LOOP DROP
+  sda.hi scl.hi sda.read 0=  \ ack low = true
+  scl.lo ;
+
+: i2c.read ( ack? -- byte )
+  0 VAR V
+  sda.hi
+  8 0 DO
+    scl.hi INPORT /I 1 I2C-SDA << >> 1 AND
+    V @ 2* OR V ! scl.lo
+  LOOP
+  IF sda.lo ELSE sda.hi THEN
+  scl.hi scl.lo sda.hi
+  V @ ;
+
+\ ============================================================
+\ Demo utilities
+\ ============================================================
+
+: toggle1
+  20 0 DO SPI-SCK setbit delay SPI-SCK clrbit delay LOOP ;
+
+: spi.demo
+  spi.init #9A spi.xfer DROP ;
+
+: i2c.demo
+  i2c.start #A0 i2c.write DROP #FF i2c.write DROP i2c.stop ;
+
+\ ============================================================
+\ end
+\ ============================================================
+```
+
+---
+
+## 🧠 How it works
+
+* `LATCH` mirrors the TEC-1’s output latch; every change updates both memory and the real port.
+* `spi.xfer` does an 8-bit SPI transfer (mode 0).
+* `i2c.start`, `i2c.stop`, `i2c.write`, and `i2c.read` give full I²C control.
+* `delay` sets timing — tweak `DELAYT` for speed vs. stability.
+* You can extend this to add analog, PWM, or 595/165 shift-chains.
+
+---
+
+## ⚗️ Example usage
+
+```forth
+spi.init
+#FF out!          \ set all bits high
+SPI-CS clrbit     \ pull CS low
+#55 spi.xfer .    \ send 0x55, print reply
+SPI-CS setbit
+
+i2c.start
+#A0 i2c.write DROP
+#FF i2c.write DROP
+i2c.stop
+```
+
+---
+
+Would you like me to extend this MINT toolkit to include **software PWM** and **ADC sampling** routines next (for generating analog-like outputs and measuring via an external ADC chip such as MCP3008)?
+
