@@ -1,4 +1,3 @@
-<img width="555" height="555" alt="image" src="https://github.com/user-attachments/assets/ae9462eb-8b16-4b9d-bafb-1c0d93bad90e" />
 
 
 # tec-IO
@@ -19,6 +18,7 @@
 https://lagacemichel.com/2022/07/02/using-shift-registers-to-increase-digital-outputs/
 
 
+<img width="555" height="555" alt="image" src="https://github.com/user-attachments/assets/ae9462eb-8b16-4b9d-bafb-1c0d93bad90e" />
 
 # option 2
 # using pc and io running mint on octave
