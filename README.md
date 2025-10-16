@@ -1,6 +1,6 @@
 # tec-IO
-
-### TE-14-23
+# option 1
+## TE-14-23
 - to talk to the outside world and also accept information from the outside. 
 - It is the first interface in TE that brings the possibility of "robotics" to the TEC1 
 - The INPUT/OUTPUT MODULE has one input port and two output ports. 
@@ -9,7 +9,7 @@
 - 
 
 
-### Iterate
+## Iterate
 
 - 24 port PPI see https://github.com/SteveJustin1963/tec-IO-PPI/
 - Shift Registers
@@ -17,7 +17,7 @@ https://lagacemichel.com/2022/07/02/using-shift-registers-to-increase-digital-ou
 
 
 
-
+# option 2
 # using pc and io running mint on octave
 It depends a bit on exactly what “simple” means for your needs (number of pins, speed, voltage levels, analog vs digital, latency, library support, etc.), but yes — there *are* USB GPIO (or “USB to general purpose I/O”) modules that can work nicely with Octave (or any PC) via serial/USB protocols.
 
