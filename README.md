@@ -1,3 +1,6 @@
+<img width="666" height="666" alt="image" src="https://github.com/user-attachments/assets/ae9462eb-8b16-4b9d-bafb-1c0d93bad90e" />
+
+
 # tec-IO
 # option 1
 ## TE-14-23
